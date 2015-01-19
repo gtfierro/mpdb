@@ -1,3 +1,7 @@
+// License stuff
+
+// Package mpdb is MsgPack Database -- a collection-based key-value store for
+// embedded clients
 package main
 
 import (
@@ -137,10 +141,6 @@ func handleIncoming(from *net.UDPAddr, buf []byte) {
 }
 
 func main() {
-	mongoaddr, err := net.ResolveTCPAddr("tcp4", "0.0.0.0:27017")
-	if err != nil {
-		log.Fatal("Error parsing Mongo address: %v", err)
-	}
 	db = NewDB("mpdb.db")
 
 	addr, err := net.ResolveUDPAddr("udp6", "[::]:7000")
