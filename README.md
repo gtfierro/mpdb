@@ -6,11 +6,11 @@ by embedded clients with limited processing power and memory.
 ### MPDB Operations
 
 All communication with MPDB is via [MsgPack](http://msgpack.org/) maps.
-Currently, MPDB only supports `map`s, `string`s, `int`s, `uint`s, `int64` and
+Currently, MPDB only supports `map`, `string`, `int`, `uint`, `int64` and
 `uint64`, and then only the latter 5 for actual values that can be stored. Keys
 can only be strings. Because this database has been designed for embedded
-clients running Lua and because `float`s are not natively supported by Lua, we
-do currently support `float`s or `double`s.
+clients running Lua and because `float` are not natively supported by Lua, we
+do currently support `float` or `double`.
 
 * `oper` is which operation is being sent
 * `nodeid` is the unique node identifier. For IPv6, this is derived from the
@@ -84,7 +84,35 @@ The `result` map will be returned
 
 #### `GET`
 
+| Key | Value |
+| --- | ----- |
+|`oper` | `GET` |
+|`nodeid` | own node id |
+|`echo` | echo tag |
+|`keys` | list of keys |
+
+`GET` returns a map of key/value pairs corresponding to the list of keys sent
+in the query. All keys will be included in the returned map, and will have
+`nil` values if they were not found in the database. If there was an error in
+the transaction, the usual error message format will be returned (see
+`PERSIST`). Each key can have a different prefix; that is, querying multiple
+collections within the same message is permitted. Each key will be prefixed
+with its collection in the returned map.
+
 #### `GETBUCKET`
+
+| Key | Value |
+| --- | ----- |
+|`oper` | `GET` |
+|`nodeid` | own node id |
+|`echo` | echo tag |
+|`collection` | name of collection |
+
+`GETBUCKET` returns a map of all key/value pairs for the given collection. Each
+key will be prefixed with teh collection name. If there was an error in the
+transaction, the usual error message format will be returned (see `PERSIST`).
+Each key can have a different prefix; that is, querying multiple collections
+within the same message is permitted.
 
 ### Server
 
