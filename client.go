@@ -169,6 +169,20 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 	if err != nil {
 		log.Error("Error writing to client %v (%v)", c.addr, err)
 	}
+
+	// now check for any messages we can now handle
+	tmpecho := c.lastEcho
+	for {
+		tmpecho += 1
+		if msg, found := c.cached[tmpecho]; found {
+			log.Debug("found and executing %v for tag %v", tmpecho, msg)
+			c.commitAndReply(msg)
+		} else {
+			if int(tmpecho-c.lastEcho) > 10 {
+				break
+			}
+		}
+	}
 }
 
 func getUint64(i interface{}) uint64 {
