@@ -139,11 +139,19 @@ monotonically increasing echo tag. For a sent message, if the client does not
 receive a response from the server with the corresponding echo tag within the
 client time-out window, the client can choose to resend the message as many
 times as it wants. Consecutive execution order is only guaranteed if the server
-receives the client's message within the server time-out window.
+receives the client's message within the server time-out window. Client echo tags
+should start at `1`.
+
+Each client is considered separately, so multiple clients do not have to
+coordinate echo tags.
+
+The server only keeps track of N messages into the future of the last confirmed
+echo tag (this is 10 by default).
 
 Parameters:
 * server time out (STO) -- 3 seconds default
 * client time out (CTO) -- 1 second default
+* num cached messages -- 10 default
 
 Example:
 
