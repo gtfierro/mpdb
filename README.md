@@ -10,7 +10,7 @@ Currently, MPDB only supports `map`, `string`, `int`, `uint`, `int64` and
 `uint64`, and then only the latter 5 for actual values that can be stored. Keys
 can only be strings. Because this database has been designed for embedded
 clients running Lua and because `float` are not natively supported by Lua, we
-do currently support `float` or `double`.
+do not currently support `float` or `double`.
 
 * `oper` is which operation is being sent
 * `nodeid` is the unique node identifier. For IPv6, this is derived from the
@@ -26,15 +26,20 @@ which are essentially discrete, local namespaces. For the `PERSIST` and
 `GETPERSIST` operations, the collection is implicitly determined to be the Node
 ID of the client accessing the data. 
 
-For all other operations, any key can be prefixed with a collection name, delineated
-by a period. Non-prefixed keys are assumed to be part of the global collection (called "global" to
-avoid confusion), and only 1 prefix is allowed per key.
+For all other operations, any key can be prefixed with a collection name,
+delineated by a period. Non-prefixed keys are assumed to be part of the global
+collection (called "global" to avoid confusion), and only 1 prefix is allowed
+per key.
 
 | Full Key | Key | Collection |
 | -------- | --- | ---------- |
 | "abc"    | "abc" | "global" |
 | "col.abc" | "abc" | "col" |
 | "col.nest.abc" | "nest.abc" | "col" |
+
+All responses will contain an `echo` field corresponding to which message
+request they correspond to. Incoming message with `echo = X` will have a
+response with `echo = X`.
 
 #### `PERSIST`
 
@@ -49,7 +54,7 @@ avoid confusion), and only 1 prefix is allowed per key.
 `nodeid`. Only that `nodeid` can access or change these values. Any prefixes
 on keys will be treated as part of the key name and NOT as a collection.
 
-`PERSIST` returns a single key/value pair: `result` with the value of an error
+`PERSIST` returns a key/value pair: `result` with the value of an error
 if there was one. If the error is an empty string, you can assume that the
 operation was successful.
 
@@ -103,7 +108,7 @@ with its collection in the returned map.
 
 | Key | Value |
 | --- | ----- |
-|`oper` | `GET` |
+|`oper` | `GETBUCKET` |
 |`nodeid` | own node id |
 |`echo` | echo tag |
 |`collection` | name of collection |
@@ -113,6 +118,43 @@ key will be prefixed with teh collection name. If there was an error in the
 transaction, the usual error message format will be returned (see `PERSIST`).
 Each key can have a different prefix; that is, querying multiple collections
 within the same message is permitted.
+
+### Reliable UDP
+
+To achieve reliable transport, MPDB includes a monotonically increasing `echo`
+tag that is consistent for each request/response transaction pair.
+
+Server-side, MPDB assumes that if it receives multiple messages, then all those
+messages will have different echo tags, and that the messages were sent in
+order of increasing echo tag. Messages will be served in that order as well.
+The server will attempt to serve messages with consecutive echo tags, but if
+the server time-out is hit before the server receives a message with the
+desired echo tag, it will serve the next available message until the missing
+message receives (if it ever does). Assuming the server has received message
+with echo tag `X`, the server timeout timer will be started for echo tag `X+1`
+upon receiving message `X+2` (if `X+1` was never received).
+
+Client-side, each successive message will be sent with a unique, consecutive,
+monotonically increasing echo tag. For a sent message, if the client does not
+receive a response from the server with the corresponding echo tag within the
+client time-out window, the client can choose to resend the message as many
+times as it wants. Consecutive execution order is only guaranteed if the server
+receives the client's message within the server time-out window.
+
+Parameters:
+* server time out (STO) -- 3 seconds default
+* client time out (CTO) -- 1 second default
+
+Example:
+
+* server receives echo tags `1, 2, 3`
+* server processes messages with tags `1, 2, 3`
+* client receives responses with tags `1, 2, 3`
+* server receives message with tag `5`. Because server has not seen message
+  `4`, the server time-out timer is started
+* client does not receive a response for message `4`, so it resends
+* server receives message `4`, and then processes messages `4, 5` and responds
+  to the client
 
 ### Server
 
@@ -133,6 +175,7 @@ test`.
 
 ### Client
 
-A functional implementation of an MPDB client can be found [here](https://github.com/SoftwareDefinedBuildings/ioet_contrib/blob/master/lib/mpdb.lua)
+A functional implementation of an MPDB client can be found
+[here](https://github.com/SoftwareDefinedBuildings/ioet_contrib/blob/master/lib/mpdb.lua)
 
 The client behavior should become apparent after reading this document.
