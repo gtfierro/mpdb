@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/ugorji/go/codec"
 	"net"
 	"time"
@@ -25,7 +26,9 @@ type Client struct {
 }
 
 func NewClient(timeout time.Duration, addr *net.UDPAddr) *Client {
-	c := &Client{timeout: timeout, addr: addr, lastEcho: 0, cached: make(map[uint64]map[string]interface{}), queue: make(chan map[string]interface{})}
+	address_nodeid := uint64(addr.IP[12])<<12 | uint64(addr.IP[13])<<8 | uint64(addr.IP[14])<<4 | uint64(addr.IP[15])
+	log.Debug("string %v nodeid %v", addr.String(), address_nodeid)
+	c := &Client{nodeid: address_nodeid, timeout: timeout, addr: addr, lastEcho: 0, cached: make(map[uint64]map[string]interface{}), queue: make(chan map[string]interface{})}
 	go c.loop()
 	return c
 }
@@ -125,12 +128,20 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 		err error
 		ret map[string]interface{}
 	)
-	log.Debug("handling %v", msg["oper"])
-	switch msg["oper"] {
+	log.Debug("handling %v", oper)
+	switch oper {
 	case "PERSIST":
-		err = db.Persist(string(nodeid), data)
+		if nodeid != c.nodeid {
+			err = fmt.Errorf("Node %v cannot access data with nodeid %v", c.nodeid, nodeid)
+		} else {
+			err = db.Persist(string(nodeid), data)
+		}
 	case "GETPERSIST":
-		ret, err = db.GetPersist(string(nodeid), keys)
+		if nodeid != c.nodeid {
+			err = fmt.Errorf("Node %v cannot access data with nodeid %v", c.nodeid, nodeid)
+		} else {
+			ret, err = db.GetPersist(string(nodeid), keys)
+		}
 	case "INSERT":
 		err = db.Insert(data)
 	case "GET":
@@ -145,6 +156,8 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 		ok = false
 		log.Error("Unrecognized operation %v", oper)
 	}
+
+	// delete entry in cache if it exists
 	log.Debug("ok? %v %v %v", ok, echo, c.lastEcho)
 	if ok {
 		c.lastEcho = echo
@@ -152,16 +165,22 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 			delete(c.cached, echo)
 		}
 	}
+
+	// create message to send back
+	packet := map[string]interface{}{
+		"result": ret,
+		"error":  err.Error(),
+		"echo":   echo,
+	}
+
+	// dial back client
 	conn, err := net.DialUDP("udp6", nil, c.addr)
 	if err != nil {
 		log.Error("could not create connection back to %v (%v)", c.addr, err)
 		return
 	}
+	// and write message
 	buf := []byte{}
-	packet := map[string]interface{}{
-		"results": ret,
-		"echo":    echo,
-	}
 	log.Debug("writing back %v", packet)
 	encoder := codec.NewEncoderBytes(&buf, &mh)
 	encoder.Encode(packet)

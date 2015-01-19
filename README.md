@@ -54,9 +54,11 @@ response with `echo = X`.
 `nodeid`. Only that `nodeid` can access or change these values. Any prefixes
 on keys will be treated as part of the key name and NOT as a collection.
 
-`PERSIST` returns a key/value pair: `result` with the value of an error
-if there was one. If the error is an empty string, you can assume that the
-operation was successful.
+`PERSIST` returns three key/value pairs: `result`, which will be empty (in the
+case of an insert command), `error` which will contain an error message if
+there is one, and `echo`, which contains the echo tag corresponding to this
+transaction. If the error is an empty string, you can assume that the operation
+was successful.
 
 #### `GETPERSIST`
 
