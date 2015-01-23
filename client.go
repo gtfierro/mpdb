@@ -87,6 +87,7 @@ func (c *Client) handleIncoming(buf []byte, writeback *net.UDPConn) {
 	switch {
 	case echo < c.lastEcho: // an old echo tag that just got here
 		log.Debug("old echo %v LE %v", echo, c.lastEcho)
+		c.queue <- msg
 	case echo == c.lastEcho+1: // the next message we want to handle
 		log.Debug("handling echo %v LE %v", echo, c.lastEcho)
 		c.queue <- msg
