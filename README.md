@@ -14,7 +14,7 @@ do not currently support `float` or `double`.
 
 * `oper` is which operation is being sent
 * `nodeid` is the unique node identifier. For IPv6, this is derived from the
-  hex representation of the last 4 bytes of the global address.
+  last 4 bytes of the global address.
 * `echo` is a monotonically increasing number used to implement reliable
   delivery over UDP
 * `data` is a key-value map representing the data to be stored

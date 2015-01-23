@@ -169,8 +169,12 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 	// create message to send back
 	packet := map[string]interface{}{
 		"result": ret,
-		"error":  err.Error(),
 		"echo":   echo,
+	}
+	if err != nil {
+		packet["error"] = err.Error()
+	} else {
+		packet["err"] = nil
 	}
 
 	// dial back client
