@@ -166,6 +166,9 @@ Example:
 * server receives message `4`, and then processes messages `4, 5` and responds
   to the client
 
+TODO: add an initialization message so that the server can "start over" a client on echo
+numbers?
+
 ### Server
 
 The storage mechanism is backed by [Bolt](https://github.com/boltdb/bolt), so

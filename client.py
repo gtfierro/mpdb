@@ -32,8 +32,11 @@ class MPDBClient(asyncore.dispatcher):
 	def handle_read(self):
 		data= self.recv(2048)
 		unp = msgpack.unpackb(data)
-		print 'RECEIVED', unp
-		self.unacked.pop(unp['echo'])
+		if random.randint(1,10) not in [1,2,3]:
+			print 'RECEIVED', unp
+			self.unacked.pop(unp['echo'])
+		else:
+			print 'DROP RECV',unp['echo']
 	
 	def writable(self):
 		time.sleep(.5)
@@ -61,7 +64,7 @@ class MPDBClient(asyncore.dispatcher):
 				print 'write',self.i
 				self.sendmaybe(msg)#, (ip, port))
 			else:
-				print 'DROP',self.i
+				print 'DROP WRITE',self.i
 		self.i += 1
 
 client = MPDBClient()

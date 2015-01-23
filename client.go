@@ -95,7 +95,11 @@ func (c *Client) handleIncoming(buf []byte, writeback *net.UDPConn) {
 		log.Debug("future echo %v LE %v", echo, c.lastEcho)
 		c.cached[echo] = msg
 		c.timer = time.After(c.timeout)
+	case echo == c.lastEcho:
+		log.Debug("duplicate echo %v LE %v", echo, c.lastEcho)
+		c.queue <- msg
 	default: // duplicate! ignore
+		// why are you here
 	}
 }
 
