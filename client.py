@@ -54,6 +54,7 @@ class MPDBClient(asyncore.dispatcher):
 				print 'write',echo
 				if time.time() - struct['sent'] > 10:
 					print "TIMEOUT", echo
+					self.unacked.pop(echo)
 					continue # 10 second timeout on retry
 				self.sendmaybe(struct['msg'])#, (ip, port))
 			return
