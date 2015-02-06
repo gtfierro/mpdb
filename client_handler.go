@@ -48,7 +48,12 @@ func (c *Client) loop() {
 		select {
 		case msg := <-c.queue:
 			log.Debug("got msg off queue")
-			c.tryCommit(msg)
+			// get echo tag from message
+			echo := getUint64(msg["echo"])
+			if echo == c.lastCommitted+1 { // next in line to be processed
+				log.Debug("commit %v -- after last committed %v", echo, c.lastCommitted)
+				c.commitAndReply(msg)
+			}
 		case <-c.resendTimer.C:
 			log.Debug("resending committed messages in window %v til %v", c.window, c.lastCommitted)
 			for echo := c.window; echo <= c.lastCommitted; echo++ {
@@ -113,27 +118,6 @@ func (c *Client) handleIncoming(buf []byte, writeback *net.UDPConn) {
 	}
 }
 
-func (c *Client) tryCommit(msg map[string]interface{}) {
-	var (
-		echo uint64
-	)
-
-	// get echo tag from message
-	echo = getUint64(msg["echo"])
-
-	/* check if we should process the message
-	 * If the message is the first one in the window, then we process.
-	 * If it is within the window, but not the first, we only serve it
-	 * if the message before it has been processed.
-	 * If it is outside the window, we do not process it.
-	 */
-	if echo == c.window { // first in window
-		c.commitAndReply(msg)
-	} else if echo == c.lastCommitted+1 { // next in line to be processed
-		c.commitAndReply(msg)
-	}
-}
-
 func (c *Client) commitAndReply(msg map[string]interface{}) {
 	var (
 		data       map[string]interface{}
@@ -168,7 +152,7 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 		err error
 		ret map[string]interface{}
 	)
-	log.Debug("handling %v", oper)
+	log.Debug("COMMIT oper %v echo %v", oper, echo)
 	switch oper {
 	case "PERSIST":
 		if nodeid != c.nodeid {
@@ -229,7 +213,9 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 		tmpecho += 1
 		if msg, found := c.cached[tmpecho]; found {
 			log.Debug("found and executing %v for tag %v", tmpecho, msg)
-			c.tryCommit(msg)
+			if tmpecho == c.lastCommitted+1 { // next in line to be processed
+				c.commitAndReply(msg)
+			}
 		} else if tmpecho > c.window+c.windowSize {
 			break
 		}
