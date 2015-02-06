@@ -112,18 +112,22 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 		echo       uint64
 		oper       string
 		ok         bool
-		found      bool
 	)
+
 	// retrieve nodeid
-	if nodeid, found = msg["nodeid"].(uint64); !found {
+	if _nodeid, found := msg["nodeid"]; !found {
 		log.Debug("Msg did not have key 'nodeid' (%v)", msg)
 		return
+	} else {
+		nodeid = getUint64(_nodeid)
 	}
 
 	// retrieve operation
-	if oper, found = msg["oper"].(string); !found {
+	if _oper, found := msg["oper"]; !found {
 		log.Debug("Msg did not have key 'oper' (%v)", msg)
 		return
+	} else {
+		oper = _oper.(string)
 	}
 
 	echo = getUint64(msg["echo"])
@@ -173,8 +177,11 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 
 	// create message to send back
 	packet := map[string]interface{}{
-		"result": ret,
+		"oper":   "RESPONSE",
+		"nodeid": nodeid,
 		"echo":   echo,
+		"result": ret,
+		"acks":   []uint64{},
 	}
 	if err != nil {
 		packet["error"] = err.Error()
