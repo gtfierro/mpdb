@@ -7,28 +7,38 @@ import (
 	"time"
 )
 
-//var mh codec.MsgpackHandle
-
 type Client struct {
 	// address of the client
 	addr *net.UDPAddr
 	// Node ID
 	nodeid uint64
-	// the last echo tag we processed
-	lastEcho uint64
+	// window start. We have ACK'd all messages up until this echo tag
+	window uint64
+	// window size
+	windowSize uint64
+	// the last echo tag we have committed. Should be within the window
+	lastCommitted uint64
 	// key-value = echo:message for echo tags we can't commit yet
 	cached map[uint64]map[string]interface{}
+	// cache of responses for resends
+	cachedResp  map[uint64]map[string]interface{}
+	resendTimer *time.Ticker
 	// processing queue of messages
 	queue chan map[string]interface{}
 	// server time-out
-	timeout time.Duration
-	timer   <-chan time.Time
+	timeout     time.Duration
+	servertimer <-chan time.Time
 }
 
 func NewClient(timeout time.Duration, addr *net.UDPAddr) *Client {
 	address_nodeid := uint64(addr.IP[12])<<12 | uint64(addr.IP[13])<<8 | uint64(addr.IP[14])<<4 | uint64(addr.IP[15])
 	log.Debug("string %v nodeid %v", addr.String(), address_nodeid)
-	c := &Client{nodeid: address_nodeid, timeout: timeout, addr: addr, lastEcho: 0, cached: make(map[uint64]map[string]interface{}), queue: make(chan map[string]interface{})}
+	c := &Client{nodeid: address_nodeid, timeout: timeout,
+		addr: addr, window: 1, windowSize: 5, lastCommitted: 0,
+		cached:      make(map[uint64]map[string]interface{}),
+		cachedResp:  make(map[uint64]map[string]interface{}),
+		resendTimer: time.NewTicker(timeout),
+		queue:       make(chan map[string]interface{})}
 	go c.loop()
 	return c
 }
@@ -37,22 +47,12 @@ func (c *Client) loop() {
 	for {
 		select {
 		case msg := <-c.queue:
-			log.Debug("in queue")
-			c.commitAndReply(msg)
-		case <-c.timer:
-			// handle next largest cached echo tag
-			log.Debug("handle out of order")
-			tmpecho := c.lastEcho
-			for {
-				tmpecho += 1
-				if msg, found := c.cached[tmpecho]; found {
-					log.Debug("found and executing %v for tag %v", tmpecho, msg)
-					c.commitAndReply(msg)
-				} else {
-					if int(tmpecho-c.lastEcho) > 10 {
-						break
-					}
-				}
+			log.Debug("got msg off queue")
+			c.tryCommit(msg)
+		case <-c.resendTimer.C:
+			log.Debug("resending committed messages in window %v til %v", c.window, c.lastCommitted)
+			for echo := c.window; echo <= c.lastCommitted; echo++ {
+				c.doSend(c.cachedResp[echo])
 			}
 		}
 	}
@@ -85,21 +85,52 @@ func (c *Client) handleIncoming(buf []byte, writeback *net.UDPConn) {
 
 	// check echo tag
 	switch {
-	case echo < c.lastEcho: // an old echo tag that just got here
-		log.Debug("old echo %v LE %v", echo, c.lastEcho)
-		c.queue <- msg
-	case echo == c.lastEcho+1: // the next message we want to handle
-		log.Debug("handling echo %v LE %v", echo, c.lastEcho)
-		c.queue <- msg
-	case echo > c.lastEcho+1: // too far in the future, start timeout
-		log.Debug("future echo %v LE %v", echo, c.lastEcho)
-		c.cached[echo] = msg
-		c.timer = time.After(c.timeout)
-	case echo == c.lastEcho:
-		log.Debug("duplicate echo %v LE %v", echo, c.lastEcho)
-		c.queue <- msg
-	default: // duplicate! ignore
-		// why are you here
+	// this is a duplicate message, so we resend? TODO
+	case echo < c.window:
+		log.Debug("received duplicate Echo %v. Window starts at %v", echo, c.window)
+	// within the window, so we queue to process
+	case echo >= c.window && echo < c.window+c.windowSize:
+		log.Debug("Received echo %v within window starting at %v", echo, c.window)
+		c.cached[echo] = msg // cache the message
+		c.queue <- msg       // queue to send
+	// beyond the window and we've alrady processed it on this side. Check if we can
+	// update the window
+	case echo >= c.window+c.windowSize:
+		diff := echo - (c.window + c.windowSize - 1)
+		if diff <= (c.lastCommitted - c.window + 1) { // advance window by diff
+			c.window += diff
+			c.cached[echo] = msg
+			c.queue <- msg
+			// throw out ACK'd responses below our window
+			for prevecho, _ := range c.cachedResp {
+				if prevecho < c.window {
+					delete(c.cachedResp, prevecho)
+				}
+			}
+			log.Debug("advanced window by %v to %v", diff, c.window)
+		}
+		log.Debug("Received echo %v outside of window starting at %v", echo, c.window)
+	}
+}
+
+func (c *Client) tryCommit(msg map[string]interface{}) {
+	var (
+		echo uint64
+	)
+
+	// get echo tag from message
+	echo = getUint64(msg["echo"])
+
+	/* check if we should process the message
+	 * If the message is the first one in the window, then we process.
+	 * If it is within the window, but not the first, we only serve it
+	 * if the message before it has been processed.
+	 * If it is outside the window, we do not process it.
+	 */
+	if echo == c.window { // first in window
+		c.commitAndReply(msg)
+	} else if echo == c.lastCommitted+1 { // next in line to be processed
+		c.commitAndReply(msg)
 	}
 }
 
@@ -166,22 +197,20 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 		log.Error("Unrecognized operation %v", oper)
 	}
 
-	// delete entry in cache if it exists
-	log.Debug("ok? %v %v %v", ok, echo, c.lastEcho)
+	// delete entry in cache if it exists and update state variables
 	if ok {
-		c.lastEcho = echo
+		c.lastCommitted = echo
 		if _, found := c.cached[echo]; found {
 			delete(c.cached, echo)
 		}
 	}
 
-	// create message to send back
+	// create response
 	packet := map[string]interface{}{
 		"oper":   "RESPONSE",
 		"nodeid": nodeid,
 		"echo":   echo,
 		"result": ret,
-		"acks":   []uint64{},
 	}
 	if err != nil {
 		packet["error"] = err.Error()
@@ -189,6 +218,26 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 		packet["err"] = nil
 	}
 
+	c.doSend(packet)
+
+	// cache the response
+	c.cachedResp[echo] = packet
+
+	// check for new messages we can process
+	tmpecho := c.lastCommitted
+	for {
+		tmpecho += 1
+		if msg, found := c.cached[tmpecho]; found {
+			log.Debug("found and executing %v for tag %v", tmpecho, msg)
+			c.tryCommit(msg)
+		} else if tmpecho > c.window+c.windowSize {
+			break
+		}
+	}
+
+}
+
+func (c *Client) doSend(msg map[string]interface{}) {
 	// dial back client
 	conn, err := net.DialUDP("udp6", nil, c.addr)
 	if err != nil {
@@ -197,27 +246,14 @@ func (c *Client) commitAndReply(msg map[string]interface{}) {
 	}
 	// and write message
 	buf := []byte{}
-	log.Debug("writing back %v", packet)
+	log.Debug("writing back %v", msg)
 	encoder := codec.NewEncoderBytes(&buf, &mh)
-	encoder.Encode(packet)
+	encoder.Encode(msg)
 	_, err = conn.Write(buf)
 	if err != nil {
 		log.Error("Error writing to client %v (%v)", c.addr, err)
 	}
 
-	// now check for any messages we can now handle
-	tmpecho := c.lastEcho
-	for {
-		tmpecho += 1
-		if msg, found := c.cached[tmpecho]; found {
-			log.Debug("found and executing %v for tag %v", tmpecho, msg)
-			c.commitAndReply(msg)
-		} else {
-			if int(tmpecho-c.lastEcho) > 10 {
-				break
-			}
-		}
-	}
 }
 
 func getUint64(i interface{}) uint64 {

@@ -40,7 +40,7 @@ func ServeUDP(addr *net.UDPAddr) {
 			log.Debug("Handling incoming from %v", addr)
 			if client, found = clients[addr.String()]; !found {
 				log.Debug("creating new client")
-				client = NewClient(3*time.Second, addr)
+				client = NewClient(2*time.Second, addr)
 				clients[addr.String()] = client
 			}
 			client.handleIncoming(buf[:n], nil)
