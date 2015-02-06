@@ -37,9 +37,8 @@ per key.
 | "col.abc" | "abc" | "col" |
 | "col.nest.abc" | "nest.abc" | "col" |
 
-All responses will contain an `echo` field corresponding to which message
-request they correspond to. Incoming message with `echo = X` will have a
-response with `echo = X`.
+Incoming message with `echo = X` will have a response with `echo = X`. All
+responses should look like `RESPONSE`, below.
 
 #### `PERSIST`
 
@@ -54,12 +53,6 @@ response with `echo = X`.
 `nodeid`. Only that `nodeid` can access or change these values. Any prefixes
 on keys will be treated as part of the key name and NOT as a collection.
 
-`PERSIST` returns three key/value pairs: `result`, which will be empty (in the
-case of an insert command), `error` which will contain an error message if
-there is one, and `echo`, which contains the echo tag corresponding to this
-transaction. If the error is an empty string, you can assume that the operation
-was successful.
-
 #### `GETPERSIST`
 
 | Key | Value |
@@ -71,8 +64,7 @@ was successful.
 
 `GETPERSIST` returns a map of key/value pairs corresponding to the list of keys
 sent in the query. All keys will be included in the returned map, and will have
-`nil` values if they were not found in the database. If there was an error
-in the transaction, the usual error message format will be returned (see `PERSIST`).
+`nil` values if they were not found in the database. 
 
 #### `INSERT`
 
@@ -87,8 +79,6 @@ in the transaction, the usual error message format will be returned (see `PERSIS
 section). A key can have up to a single prefix, but the `data` map in this
 message can have keys that belong to different collections.
 
-The `result` map will be returned
-
 #### `GET`
 
 | Key | Value |
@@ -100,11 +90,10 @@ The `result` map will be returned
 
 `GET` returns a map of key/value pairs corresponding to the list of keys sent
 in the query. All keys will be included in the returned map, and will have
-`nil` values if they were not found in the database. If there was an error in
-the transaction, the usual error message format will be returned (see
-`PERSIST`). Each key can have a different prefix; that is, querying multiple
-collections within the same message is permitted. Each key will be prefixed
-with its collection in the returned map.
+`nil` values if they were not found in the database. Each key can have a
+different prefix; that is, querying multiple collections within the same
+message is permitted. Each key will be prefixed with its collection in the
+returned map.
 
 #### `GETBUCKET`
 
@@ -116,15 +105,40 @@ with its collection in the returned map.
 |`collection` | name of collection |
 
 `GETBUCKET` returns a map of all key/value pairs for the given collection. Each
-key will be prefixed with teh collection name. If there was an error in the
-transaction, the usual error message format will be returned (see `PERSIST`).
-Each key can have a different prefix; that is, querying multiple collections
-within the same message is permitted.
+key will be prefixed with teh collection name.  Each key can have a different
+prefix; that is, querying multiple collections within the same message is
+permitted.
 
-### Reliable UDP
+#### `RESPONSE`
+| Key | Value |
+| --- | ----- |
+| `oper` | `RESPONSE` |
+| `nodeid` | which node we respond to |
+| `echo` | which message we respond to |
+| `result` | the result of the query |
+| `error` | any error that occurred |
+| `acks` | list of ACKd messages |
+
+`RESPONSE` is what is returned by the server either in response to a "get"
+command, a "set" command, or a null ACK message sent by the server. The
+`result` key contains any data that was queried by the node in the message
+identified by the `echo` key. Other messages that do not require a special
+message (that is, no result and no error), will be ACKd in the list of echo
+tags provided in `acks`.
+
+### Reliable Protocol
+
+There are two goals for the reliable protocol. Firstly, because the Storm
+radios for the motes we're using have such high packet loss rates, it would be
+nice to ensure to the clients that a transaction has been completed. Secondly,
+doing acknowledgements at the application-level (instead of inventing a new
+layer-4 protocol) means that we can bundle together selective acknowledgements
+in order to try to reduce the amount of in-air traffic.
 
 To achieve reliable transport, MPDB includes a monotonically increasing `echo`
 tag that is consistent for each request/response transaction pair.
+
+#### Server
 
 Server-side, MPDB assumes that if it receives multiple messages, then all those
 messages will have different echo tags, and that the messages were sent in
@@ -132,34 +146,41 @@ order of increasing echo tag. Messages will be served in that order as well.
 The server will attempt to serve messages with consecutive echo tags, but if
 the server time-out is hit before the server receives a message with the
 desired echo tag, it will serve the next available message until the missing
-message receives (if it ever does). Assuming the server has received message
-with echo tag `X`, the server timeout timer will be started for echo tag `X+1`
-upon receiving message `X+2` (if `X+1` was never received).
+message receives (if it ever does). 
+
+The Server ACK Timeout is triggered on the reception of a packet for a given
+node that does not already have the SATO running. The server builds up a list
+of all echo tags received during this time period. Whenever the server sends a
+response back to the client, it includes in that message a list of ACKd echo
+tags and pops those echo tags off of its internal list. When the timeout
+expires, the server sends a null resposnse to the client that just contains the
+remaining ACKd echo tags. If any of these messages require a special message
+(e.g.  a result or an error), those will be returned in their own `RESPONSE`
+messages back to the client.
+
+#### Client
 
 Client-side, each successive message will be sent with a unique, consecutive,
-monotonically increasing echo tag. For a sent message, if the client does not
+monotonically increasing echo tag.  For a sent message, if the client does not
 receive a response from the server with the corresponding echo tag within the
 client time-out window, the client can choose to resend the message as many
 times as it wants. Consecutive execution order is only guaranteed if the server
-receives the client's message within the server time-out window. Client echo tags
-should start at `1`.
+receives the client's message within the server time-out window. Client echo
+tags should start at `1`.
 
 Each client is considered separately, so multiple clients do not have to
 coordinate echo tags.
 
-The server only keeps track of N messages into the future of the last confirmed
-echo tag (this is 10 by default).
-
-Parameters:
-* server time out (STO) -- 3 seconds default
-* client time out (CTO) -- 1 second default
-* num cached messages -- 10 default
+Parameters (negotiable):
+* server time out (STO) -- 4 seconds default
+* server ack time out (SATO) -- 5 seconds default
+* client time out (CTO) -- 3 second default
 
 Example:
 
 * server receives echo tags `1, 2, 3`
 * server processes messages with tags `1, 2, 3`
-* client receives responses with tags `1, 2, 3`
+* client receives a response with tags `1, 2, 3`
 * server receives message with tag `5`. Because server has not seen message
   `4`, the server time-out timer is started
 * client does not receive a response for message `4`, so it resends
@@ -169,7 +190,7 @@ Example:
 TODO: add an initialization message so that the server can "start over" a client on echo
 numbers?
 
-### Server
+### Server Implementation
 
 The storage mechanism is backed by [Bolt](https://github.com/boltdb/bolt), so
 it is a single file with transactions and ACID semantics on the server side.
